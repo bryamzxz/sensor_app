@@ -9,7 +9,14 @@ os.environ.setdefault("TELEGRAM_CHAT_ID", "x")
 
 import serial  # noqa: E402
 
-from server import conectar_db, conectar_serial, flush_db  # noqa: E402
+from server import (  # noqa: E402
+    conectar_db,
+    conectar_serial,
+    flush_db,
+    wal_checkpoint,
+    parse_sensor_block,
+    enviar_notificacion,
+)  # noqa: E402
 
 
 class DummySerial:
@@ -53,6 +60,7 @@ def test_flush_db_checkpoint_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr("server.safe_execute", fake_safe_execute)
     inserted = flush_db(conn, buffer)
+    wal_checkpoint(conn)
     assert inserted == 1
 
 
@@ -75,3 +83,48 @@ def test_conectar_serial_reconnect():
         with mock.patch("serial.Serial", side_effect=serial_side_effect):
             result = conectar_serial()
             assert result is ser_second
+
+
+def test_full_flow(tmp_path, monkeypatch):
+    db_path = tmp_path / "db.sqlite"
+    conn = conectar_db(db_path)
+    lines = [
+        "------ Lecturas ------",
+        "TMP117 Temp: 20.0 C",
+        "BME680 Temp: 21.0 C",
+        "Humedad: 50 %",
+        "Presion: 1000 hPa",
+        "Gas Resistencia: 200 kOhm",
+        "",
+    ]
+    ser = DummySerial(lines)
+
+    posts = []
+
+    def fake_post(url, data, timeout):
+        posts.append((url, data))
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"result": {"message_id": 1}}
+
+            def raise_for_status(self):
+                pass
+
+        return Resp()
+
+    monkeypatch.setattr("server.session.post", fake_post)
+
+    header = ser.readline().decode()
+    assert "Lecturas" in header
+    sensor_lines = [ser.readline().decode().strip() for _ in range(6)]
+    datos = {"Tiempo": "2030-01-01 00:00:00"}
+    datos.update(parse_sensor_block(sensor_lines))
+    inserted = flush_db(conn, [datos])
+    wal_checkpoint(conn)
+    enviar_notificacion(datos)
+
+    assert inserted == 1
+    assert posts

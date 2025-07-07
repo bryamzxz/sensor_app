@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 os.environ.setdefault("TELEGRAM_TOKEN", "x")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "x")
 
-from server import conectar_db, flush_db, safe_execute  # noqa: E402
+from server import conectar_db, flush_db, safe_execute, wal_checkpoint  # noqa: E402
 
 
 def test_safe_execute_error(tmp_path):
@@ -33,6 +33,7 @@ def test_flush_db(tmp_path):
     ]
 
     inserted = flush_db(conn, buffer)
+    wal_checkpoint(conn)
     assert inserted == 1
     cur = conn.execute("SELECT COUNT(*) FROM lecturas")
     assert cur.fetchone()[0] == 1

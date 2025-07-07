@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Dict
 import pytz
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 # ------------------------------
 # ⚙️ Configuración general
@@ -121,6 +121,8 @@ def parse_sensor_block(lines: list[str]) -> Dict[str, float]:
                 datos["Presion"] = num
             elif "Gas Resistencia" in key:
                 datos["Gas_Resistencia"] = num
+            else:
+                logging.warning(f"Etiqueta desconocida: {key}")
     except Exception as e:  # catch unexpected errors
         logging.error(f"❌ Error parseando bloque: {e}")
     return datos
@@ -142,22 +144,26 @@ def safe_execute(
 
 
 def flush_db(conn: sqlite3.Connection, buffer: list[Dict[str, Any]]) -> int:
-    """Inserta los registros del buffer en la base de datos de forma segura."""
+    """Inserta el buffer y depura registros antiguos."""
     registros = [tuple(d.get(c) for c in COLUMNAS) for d in buffer]
     try:
         with conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO lecturas VALUES (?,?,?,?,?,?)", registros
             )
+            conn.execute(
+                "DELETE FROM lecturas WHERE Tiempo < datetime('now','-7 days')"
+            )
     except sqlite3.DatabaseError as e:
         logging.error(f"❌ Error al escribir en BD: {e}")
         return 0
 
-    safe_execute(conn, "DELETE FROM lecturas WHERE Tiempo < datetime('now','-7 days')")
-    # separa checkpoint para evitar bloquear si falla
-    safe_execute(conn, "PRAGMA wal_checkpoint(TRUNCATE);")
-
     return len(registros)
+
+
+def wal_checkpoint(conn: sqlite3.Connection) -> None:
+    """Ejecuta un checkpoint WAL sin interrumpir errores."""
+    safe_execute(conn, "PRAGMA wal_checkpoint(TRUNCATE);")
 
 
 # ------------------------------
@@ -262,19 +268,25 @@ def main() -> None:
     TELEGRAM_TOKEN = token
     TELEGRAM_CHAT_ID = chat_id
 
-    conn = conectar_db(DB_FILE)
-    ser = conectar_serial()
-
-    buffer = []
-    contador_total = conn.execute("SELECT COUNT(*) FROM lecturas").fetchone()[0] or 0
-    logging.info(f"Se reanuda el script. Registros en BD: {contador_total}")
-
-    ahora = time.time()
-    proximo_flush_db = ahora + random.randint(MIN_ESCRITURA_DB, MAX_ESCRITURA_DB)
-
-    logging.info("📡 Iniciando captura de datos...")
-
+    conn: sqlite3.Connection | None = None
+    ser: serial.Serial | None = None
     try:
+        conn = conectar_db(DB_FILE)
+        ser = conectar_serial()
+        assert conn is not None
+        assert ser is not None
+
+        buffer = []
+        contador_total = (
+            conn.execute("SELECT COUNT(*) FROM lecturas").fetchone()[0] or 0
+        )
+        logging.info(f"Se reanuda el script. Registros en BD: {contador_total}")
+
+        ahora = time.time()
+        proximo_flush_db = ahora + random.randint(MIN_ESCRITURA_DB, MAX_ESCRITURA_DB)
+
+        logging.info("📡 Iniciando captura de datos...")
+
         while True:
             try:
                 if not ser.is_open:
@@ -287,6 +299,7 @@ def main() -> None:
             except serial.SerialException:
                 logging.error("Serial perdido. Cerrando y reconectando...")
                 ser.close()
+                time.sleep(2)
                 ser = conectar_serial()
                 continue
 
@@ -310,6 +323,7 @@ def main() -> None:
                             "Serial perdido durante lectura. Cerrando y reconectando..."
                         )
                         ser.close()
+                        time.sleep(2)
                         ser = conectar_serial()
                         lost_serial = True
                         break
@@ -328,6 +342,7 @@ def main() -> None:
                 logging.info(f"Iniciando flush de {len(buffer)} registros a la BD.")
                 t0 = time.time()
                 escritos = flush_db(conn, buffer)
+                wal_checkpoint(conn)
                 t1 = time.time()
                 if escritos:
                     contador_total += escritos
@@ -345,9 +360,10 @@ def main() -> None:
     except KeyboardInterrupt:
         logging.info("🚫 Detenido manualmente.")
     finally:
-        if ser.is_open:
+        if ser and ser.is_open:
             ser.close()
-        conn.close()
+        if conn:
+            conn.close()
         session.close()
         logging.info("Script finalizado. Conexiones cerradas.")
 
