@@ -1,5 +1,8 @@
 # Sensor App
 
+![CI](https://github.com/tu_usuario/sensor_app/actions/workflows/ci.yml/badge.svg)
+![Coverage](https://img.shields.io/badge/coverage-unknown-lightgrey.svg)
+
 Este repositorio contiene un script en Python para capturar lecturas de sensores TMP117 y BME680 conectados a un Arduino, almacenarlas en SQLite (modo WAL), y enviar notificaciones periódicas a Telegram.
 
 ## Características
