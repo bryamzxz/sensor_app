@@ -1,3 +1,4 @@
 pyserial
 requests
 pytz
+python-dotenv
