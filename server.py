@@ -30,16 +30,8 @@ LOG_FILE = os.path.join(LOG_DIR, "eventos.log")
 MIN_ESCRITURA_DB = 300  # 5 minutos
 MAX_ESCRITURA_DB = 600  # 10 minutos
 
-load_dotenv()  # lee .env y carga las variables en os.environ
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    logging.error(
-        "❌ Debes definir TELEGRAM_TOKEN y TELEGRAM_CHAT_ID en las variables de entorno."
-    )
-    sys.exit(1)
+TELEGRAM_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
 
 ARDUINO_VID = 0x2341
 ARDUINO_PID = 0x1002
@@ -108,25 +100,29 @@ def conectar_db(path):
 def parse_sensor_block(lines: list[str]) -> Dict[str, float]:
     """Parsea un bloque de líneas proveniente del serial."""
     datos: Dict[str, float] = {}
-    for line in lines:
-        if ":" not in line:
-            continue
-        key, val = line.split(":", 1)
-        val = val.strip().split(" ")[0]
-        try:
-            num = float(val)
-        except ValueError:
-            continue
-        if "TMP117 Temp" in key:
-            datos["TMP117_Temp"] = num
-        elif "BME680 Temp" in key:
-            datos["BME680_Temp"] = num
-        elif "Humedad" in key:
-            datos["Humedad"] = num
-        elif "Presion" in key or "Presión" in key:
-            datos["Presion"] = num
-        elif "Gas Resistencia" in key:
-            datos["Gas_Resistencia"] = num
+    try:
+        for line in lines:
+            if ":" not in line:
+                continue
+            key, val = line.split(":", 1)
+            val = val.strip().split(" ")[0]
+            try:
+                num = float(val)
+            except ValueError:
+                logging.error(f"Valor inválido en línea: {line}")
+                continue
+            if "TMP117 Temp" in key:
+                datos["TMP117_Temp"] = num
+            elif "BME680 Temp" in key:
+                datos["BME680_Temp"] = num
+            elif "Humedad" in key:
+                datos["Humedad"] = num
+            elif "Presion" in key or "Presión" in key:
+                datos["Presion"] = num
+            elif "Gas Resistencia" in key:
+                datos["Gas_Resistencia"] = num
+    except Exception as e:  # catch unexpected errors
+        logging.error(f"❌ Error parseando bloque: {e}")
     return datos
 
 
@@ -156,8 +152,11 @@ def flush_db(conn: sqlite3.Connection, buffer: list[Dict[str, Any]]) -> int:
     except sqlite3.DatabaseError as e:
         logging.error(f"❌ Error al escribir en BD: {e}")
         return 0
+
     safe_execute(conn, "DELETE FROM lecturas WHERE Tiempo < datetime('now','-7 days')")
-    conn.commit()
+    # separa checkpoint para evitar bloquear si falla
+    safe_execute(conn, "PRAGMA wal_checkpoint(TRUNCATE);")
+
     return len(registros)
 
 
@@ -249,6 +248,19 @@ def enviar_notificacion(datos):
 
 def main() -> None:
     """Punto de entrada principal del script."""
+    load_dotenv()
+
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        logging.error(
+            "❌ Debes definir TELEGRAM_TOKEN y TELEGRAM_CHAT_ID en las variables de entorno."
+        )
+        sys.exit(1)
+
+    global TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+    TELEGRAM_TOKEN = token
+    TELEGRAM_CHAT_ID = chat_id
 
     conn = conectar_db(DB_FILE)
     ser = conectar_serial()
@@ -264,13 +276,14 @@ def main() -> None:
 
     try:
         while True:
-            if not ser.is_open:
-                logging.warning("El puerto serial no está abierto. Reconectando...")
-                ser = conectar_serial()
-                continue
-
             try:
+                if not ser.is_open:
+                    logging.warning("El puerto serial no está abierto. Reconectando...")
+                    ser = conectar_serial()
+                    continue
+
                 line = ser.readline().decode("utf-8", errors="ignore").strip()
+
             except serial.SerialException:
                 logging.error("Serial perdido. Cerrando y reconectando...")
                 ser.close()
