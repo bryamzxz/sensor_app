@@ -52,9 +52,20 @@ Este repositorio contiene un script en Python para capturar lecturas de sensores
    ```
 4. Ejecuta el script:
 
-   ```bash
-   python server.py
-   ```
+ ```bash
+  python server.py
+  ```
+
+## Contribuir con pre-commit
+
+Este repositorio incluye configuración de **pre-commit** con `black`, `flake8` y
+`mypy`. Para activarla en tu clon local:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+De este modo los chequeos se ejecutarán automáticamente antes de cada commit.
 
 ## Uso con Docker
 
