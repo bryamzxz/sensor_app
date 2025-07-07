@@ -5,6 +5,7 @@ import random
 import sqlite3
 import logging
 from logging.handlers import RotatingFileHandler
+from dotenv import load_dotenv
 import requests
 import serial
 import serial.tools.list_ports
@@ -23,8 +24,14 @@ LOG_FILE = os.path.join(LOG_DIR, "eventos.log")
 MIN_ESCRITURA_DB    = 300   # 5 minutos
 MAX_ESCRITURA_DB    = 600   # 10 minutos
 
-TELEGRAM_TOKEN   = "7895956023:AAHiOAZtA-cSkuRF6oikdMHJu2-YJtTPLs8"  # tu token de Telegram
-TELEGRAM_CHAT_ID = "1410731981"  # tu chat_id
+load_dotenv()   # lee .env y carga las variables en os.environ
+
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    logging.error("❌ Debes definir TELEGRAM_TOKEN y TELEGRAM_CHAT_ID en las variables de entorno.")
+    exit(1)
 
 ARDUINO_VID = 0x2341
 ARDUINO_PID = 0x1002
