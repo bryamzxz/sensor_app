@@ -1,4 +1,4 @@
-# Sensor App
+# Sensor App v2X
 
 ![CI](https://github.com/tu_usuario/sensor_app/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-unknown-lightgrey.svg)
@@ -98,6 +98,9 @@ De este modo los chequeos se ejecutarán automáticamente antes de cada commit.
 * **Retención**:
 
   * La línea `DELETE FROM lecturas WHERE Tiempo < datetime('now','-7 days')` mantiene sólo 7 días de datos. Modifícala si necesitas otro periodo.
+* **Rutas y VID/PID**:
+  * Las carpetas `data/` y `logs/` se crean con permisos 700 y pueden cambiarse con las constantes `DATA_DIR` y `LOG_DIR` en `server.py`.
+  * Los identificadores USB del Arduino (`ARDUINO_VID`, `ARDUINO_PID`) también son configurables al inicio del script.
 
 ## Contribuciones
 

@@ -31,3 +31,8 @@ def test_parse_sensor_block_valid():
 def test_parse_sensor_block_invalid():
     lines = ["foo", "bar"]
     assert parse_sensor_block(lines) == {}
+
+
+def test_parse_sensor_block_unknown_label():
+    lines = ["Desconocido: 123"]
+    assert parse_sensor_block(lines) == {}
