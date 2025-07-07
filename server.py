@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import time
 import random
 import sqlite3
@@ -10,6 +11,7 @@ import requests
 import serial
 import serial.tools.list_ports
 from datetime import datetime
+from typing import Any, Dict
 import pytz
 
 # ------------------------------
@@ -21,27 +23,37 @@ LOG_DIR = "logs"
 DB_FILE = os.path.join(DATA_DIR, "datos.db")
 LOG_FILE = os.path.join(LOG_DIR, "eventos.log")
 
-MIN_ESCRITURA_DB    = 300   # 5 minutos
-MAX_ESCRITURA_DB    = 600   # 10 minutos
+MIN_ESCRITURA_DB = 300  # 5 minutos
+MAX_ESCRITURA_DB = 600  # 10 minutos
 
-load_dotenv()   # lee .env y carga las variables en os.environ
+load_dotenv()  # lee .env y carga las variables en os.environ
 
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    logging.error("❌ Debes definir TELEGRAM_TOKEN y TELEGRAM_CHAT_ID en las variables de entorno.")
-    exit(1)
+    logging.error(
+        "❌ Debes definir TELEGRAM_TOKEN y TELEGRAM_CHAT_ID en las variables de entorno."
+    )
+    sys.exit(1)
 
 ARDUINO_VID = 0x2341
 ARDUINO_PID = 0x1002
 
-COLUMNAS = ["Tiempo", "TMP117_Temp", "BME680_Temp", "Humedad", "Presion", "Gas_Resistencia"]
+COLUMNAS = [
+    "Tiempo",
+    "TMP117_Temp",
+    "BME680_Temp",
+    "Humedad",
+    "Presion",
+    "Gas_Resistencia",
+]
 
 # ------------------------------
 # 📓 Logging con zona local y rotación
 # ------------------------------
 os.makedirs(LOG_DIR, exist_ok=True)
+
 
 class TZFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -49,6 +61,7 @@ class TZFormatter(logging.Formatter):
         if datefmt:
             return dt.strftime(datefmt)
         return dt.isoformat()
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -58,6 +71,7 @@ fmt = "%(asctime)s - %(levelname)s - %(message)s"
 datefmt = "%Y-%m-%d %H:%M:%S"
 handler.setFormatter(TZFormatter(fmt, datefmt))
 logger.addHandler(handler)
+
 
 # ------------------------------
 # 🗄️ SQLite optimizado y seguro
@@ -69,7 +83,8 @@ def conectar_db(path):
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
-    conn.execute("""
+    conn.execute(
+        """
       CREATE TABLE IF NOT EXISTS lecturas (
         Tiempo TEXT PRIMARY KEY,
         TMP117_Temp REAL,
@@ -78,10 +93,13 @@ def conectar_db(path):
         Presion REAL,
         Gas_Resistencia REAL
       )
-    """)
+    """
+    )
     return conn
 
+
 # --- [ELIMINADO] La función obtener_ultimo_registro ya no es necesaria ---
+
 
 # ------------------------------
 # 🔌 Serial con reconexión
@@ -92,6 +110,7 @@ def detectar_puerto_arduino():
             logging.info(f"Arduino detectado en {p.device}")
             return p.device
     return None
+
 
 def conectar_serial():
     while True:
@@ -108,11 +127,13 @@ def conectar_serial():
             logging.warning("Esperando conexión con Arduino...")
         time.sleep(5)
 
+
 # ------------------------------
 # 📲 Envío a Telegram
 # ------------------------------
 session = requests.Session()
 session.headers.update({"Connection": "keep-alive"})
+
 
 def enviar_notificacion(datos):
     if not datos:
@@ -122,7 +143,7 @@ def enviar_notificacion(datos):
     tiempo_para_mostrar = datos.get("Tiempo", "N/A")
     if datos.get("Tiempo"):
         try:
-            dt_utc = datetime.strptime(datos['Tiempo'], "%Y-%m-%d %H:%M:%S")
+            dt_utc = datetime.strptime(datos["Tiempo"], "%Y-%m-%d %H:%M:%S")
             dt_utc = pytz.utc.localize(dt_utc)
             dt_local = dt_utc.astimezone(ZONA_HORARIA_LOCAL)
             tiempo_para_mostrar = dt_local.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -146,8 +167,12 @@ def enviar_notificacion(datos):
     try:
         r = session.post(
             url,
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"},
-            timeout=15
+            data={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": mensaje,
+                "parse_mode": "Markdown",
+            },
+            timeout=15,
         )
         r.raise_for_status()
         data = r.json()
@@ -161,106 +186,139 @@ def enviar_notificacion(datos):
     except Exception as e:
         logging.error(f"❌ Error inesperado en enviar_notificación: {e}")
 
-# ------------------------------
-# 🚀 Inicio del sistema
-# ------------------------------
-conn = conectar_db(DB_FILE)
-ser = conectar_serial()
 
-buffer = []
-contador_total = conn.execute("SELECT COUNT(*) FROM lecturas").fetchone()[0] or 0
-logging.info(f"Se reanuda el script. Registros en BD: {contador_total}")
+def main() -> None:
+    """Punto de entrada principal del script."""
 
-ahora = time.time()
-proximo_flush_db = ahora + random.randint(MIN_ESCRITURA_DB, MAX_ESCRITURA_DB)
-# --- [ELIMINADO] La variable proxima_notificacion ya no es necesaria ---
+    conn = conectar_db(DB_FILE)
+    ser = conectar_serial()
 
-logging.info("📡 Iniciando captura de datos...")
+    buffer = []
+    contador_total = conn.execute("SELECT COUNT(*) FROM lecturas").fetchone()[0] or 0
+    logging.info(f"Se reanuda el script. Registros en BD: {contador_total}")
 
-# ------------------------------
-# 🔁 Bucle principal
-# ------------------------------
-try:
-    while True:
-        if not ser.is_open:
-            logging.warning("El puerto serial no está abierto. Reconectando...")
-            ser = conectar_serial()
-            continue
+    ahora = time.time()
+    proximo_flush_db = ahora + random.randint(MIN_ESCRITURA_DB, MAX_ESCRITURA_DB)
 
-        try:
-            line = ser.readline().decode('utf-8', errors='ignore').strip()
-        except serial.SerialException:
-            logging.error("Serial perdido. Cerrando y reconectando...")
-            ser.close()
-            ser = conectar_serial()
-            continue
+    logging.info("📡 Iniciando captura de datos...")
 
-        if "------ Lecturas ------" in line and line:
-            ahora_local = datetime.now(ZONA_HORARIA_LOCAL)
-            tiempo_utc_str = ahora_local.astimezone(pytz.utc).strftime("%Y-%m-%d %H:%M:%S")
-            datos = {"Tiempo": tiempo_utc_str}
+    try:
+        while True:
+            if not ser.is_open:
+                logging.warning("El puerto serial no está abierto. Reconectando...")
+                ser = conectar_serial()
+                continue
 
-            ser.timeout = 1
-            for _ in range(6):
-                l = ser.readline().decode('utf-8', errors='ignore').strip()
-                try:
-                    if ":" not in l: continue
-                    key, val = l.split(":", 1)
-                    val = val.strip().split(" ")[0]
-                    if "TMP117 Temp" in key:     datos["TMP117_Temp"] = float(val)
-                    elif "BME680 Temp" in key:   datos["BME680_Temp"] = float(val)
-                    elif "Humedad" in key:       datos["Humedad"] = float(val)
-                    elif "Presión" in key:       datos["Presion"] = float(val)
-                    elif "Gas Resistencia" in key: datos["Gas_Resistencia"] = float(val)
-                except (ValueError, IndexError) as e:
-                    logging.warning(f"Error parseando línea del sensor '{l}': {e}")
-            ser.timeout = 2
-
-            if any(k in datos for k in COLUMNAS if k != "Tiempo"):
-                buffer.append(datos)
-
-        ahora = time.time()
-
-        # [LÓGICA CONSERVADA] Flush y notificación aleatoria cada 5-10 minutos
-        if ahora >= proximo_flush_db and buffer:
-            logging.info(f"Iniciando flush de {len(buffer)} registros a la BD.")
-            t0 = time.time()
-
-            registros_para_insertar = [tuple(d.get(c) for c in COLUMNAS) for d in buffer]
-
-            # Paso 1: Transacción atómica para escribir y borrar datos.
-            with conn:
-                conn.executemany("INSERT OR REPLACE INTO lecturas VALUES (?,?,?,?,?,?)", registros_para_insertar)
-                conn.execute("DELETE FROM lecturas WHERE Tiempo < datetime('now', '-7 days')")
-
-            # Paso 2: Ejecutar el checkpoint DESPUÉS de que la transacción anterior haya terminado.
             try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                logging.info("✔ Checkpoint WAL completado exitosamente.")
-            except sqlite3.OperationalError as e:
-                # Este error aún podría ocurrir si otro proceso accede a la DB, pero ya no por el script mismo.
-                logging.error(f"❌ Error en WAL checkpoint: {e}")
+                line = ser.readline().decode("utf-8", errors="ignore").strip()
+            except serial.SerialException:
+                logging.error("Serial perdido. Cerrando y reconectando...")
+                ser.close()
+                ser = conectar_serial()
+                continue
 
-            t1 = time.time()
-            contador_total += len(buffer)
-            logging.info(f"✔ Flusheo completado en {t1-t0:.2f}s. Total en BD: {contador_total}")
-            
-            # Notificar con el último dato del buffer que se acaba de guardar
-            enviar_notificacion(buffer[-1])
-            
-            buffer.clear()
-            proximo_flush_db = ahora + random.randint(MIN_ESCRITURA_DB, MAX_ESCRITURA_DB)
+            if "------ Lecturas ------" in line and line:
+                ahora_local = datetime.now(ZONA_HORARIA_LOCAL)
+                tiempo_utc_str = ahora_local.astimezone(pytz.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                datos: Dict[str, Any] = {"Tiempo": tiempo_utc_str}
 
-        # --- [ELIMINADO] El bloque de notificación periódica ya no existe ---
+                ser.timeout = 1
+                lost_serial = False
+                for _ in range(6):
+                    try:
+                        sensor_line = (
+                            ser.readline().decode("utf-8", errors="ignore").strip()
+                        )
+                    except serial.SerialException:
+                        logging.error(
+                            "Serial perdido durante lectura. Cerrando y reconectando..."
+                        )
+                        ser.close()
+                        ser = conectar_serial()
+                        lost_serial = True
+                        break
+                    try:
+                        if ":" not in sensor_line:
+                            continue
+                        key, val = sensor_line.split(":", 1)
+                        val = val.strip().split(" ")[0]
+                        if "TMP117 Temp" in key:
+                            datos["TMP117_Temp"] = float(val)
+                        elif "BME680 Temp" in key:
+                            datos["BME680_Temp"] = float(val)
+                        elif "Humedad" in key:
+                            datos["Humedad"] = float(val)
+                        elif "Presión" in key:
+                            datos["Presion"] = float(val)
+                        elif "Gas Resistencia" in key:
+                            datos["Gas_Resistencia"] = float(val)
+                    except (ValueError, IndexError) as e:
+                        logging.warning(
+                            f"Error parseando línea del sensor '{sensor_line}': {e}"
+                        )
 
-        time.sleep(1)
+                ser.timeout = 2
+                if lost_serial:
+                    continue
 
-except KeyboardInterrupt:
-    logging.info("🚫 Detenido manualmente.")
-finally:
-    if 'ser' in locals() and ser.is_open:
-        ser.close()
-    if 'conn' in locals():
+                if any(k in datos for k in COLUMNAS if k != "Tiempo"):
+                    buffer.append(datos)
+
+            ahora = time.time()
+
+            if ahora >= proximo_flush_db and buffer:
+                logging.info(f"Iniciando flush de {len(buffer)} registros a la BD.")
+                t0 = time.time()
+
+                registros_para_insertar = [
+                    tuple(d.get(c) for c in COLUMNAS) for d in buffer
+                ]
+
+                try:
+                    with conn:
+                        conn.executemany(
+                            "INSERT OR REPLACE INTO lecturas VALUES (?,?,?,?,?,?)",
+                            registros_para_insertar,
+                        )
+                        conn.execute(
+                            "DELETE FROM lecturas WHERE Tiempo < datetime('now', '-7 days')"
+                        )
+                except sqlite3.DatabaseError as e:
+                    logging.error(f"❌ Error al escribir en BD: {e}")
+                    continue
+
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    logging.info("✔ Checkpoint WAL completado exitosamente.")
+                except sqlite3.OperationalError as e:
+                    logging.error(f"❌ Error en WAL checkpoint: {e}")
+
+                t1 = time.time()
+                contador_total += len(buffer)
+                logging.info(
+                    f"✔ Flusheo completado en {t1 - t0:.2f}s. Total en BD: {contador_total}"
+                )
+
+                enviar_notificacion(buffer[-1])
+
+                buffer.clear()
+                proximo_flush_db = ahora + random.randint(
+                    MIN_ESCRITURA_DB, MAX_ESCRITURA_DB
+                )
+
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        logging.info("🚫 Detenido manualmente.")
+    finally:
+        if ser.is_open:
+            ser.close()
         conn.close()
-    logging.info("Script finalizado. Conexiones cerradas.")
-    print("\nFinalizado.")
+        session.close()
+        logging.info("Script finalizado. Conexiones cerradas.")
+
+
+if __name__ == "__main__":
+    main()
